@@ -1,0 +1,6 @@
+# spike working data — not for the repo
+spike/videos/
+spike/output/
+spike/done.txt
+spike/.venv/
+__pycache__/
