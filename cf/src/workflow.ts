@@ -31,9 +31,11 @@ const PLACES_SCHEMA = {
       items: {
         type: "object",
         properties: {
+          // Workers AI JSON mode rejects union types (AiError 5024), so
+          // "unknown" is the empty string here, normalized to null after.
           name: { type: "string" },
-          name_japanese: { type: ["string", "null"] },
-          city: { type: ["string", "null"] },
+          name_japanese: { type: "string" },
+          city: { type: "string" },
           category: { type: "string" },
           evidence: { type: "string" },
           evidence_quote: { type: "string" },
@@ -122,7 +124,11 @@ export class VideoPipeline extends WorkflowEntrypoint<Env, Params> {
         }) as string | { response?: unknown };
         const raw = typeof out === "string" ? out : out.response;
         const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-        return (parsed as { places: Place[] }).places;
+        return (parsed as { places: Place[] }).places.map((p) => ({
+          ...p,
+          name_japanese: p.name_japanese || null,
+          city: p.city || null,
+        }));
       });
 
       // 4. Geocode each place via Google Places Text Search (New).
