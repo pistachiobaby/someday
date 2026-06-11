@@ -1,0 +1,17 @@
+{
+  "name": "someday-cf",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:init": "wrangler d1 execute someday --remote --file=./schema.sql"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "wrangler": "^4.0.0",
+    "@cloudflare/workers-types": "^4.0.0"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.0.28"
+  }
+}

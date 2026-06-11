@@ -4,3 +4,5 @@ spike/output/
 spike/done.txt
 spike/.venv/
 __pycache__/
+cf/node_modules/
+cf/package-lock.json

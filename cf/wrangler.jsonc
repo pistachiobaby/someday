@@ -1,0 +1,34 @@
+{
+  "name": "someday",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "containers": [
+    {
+      "class_name": "Processor",
+      "image": "./container/Dockerfile",
+      "instance_type": "standard-2",
+      "max_instances": 3
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "PROCESSOR", "class_name": "Processor" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Processor"] }],
+  "workflows": [
+    {
+      "name": "video-pipeline",
+      "binding": "VIDEO_PIPELINE",
+      "class_name": "VideoPipeline"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "someday",
+      "database_id": "TODO-run: wrangler d1 create someday"
+    }
+  ],
+  "ai": { "binding": "AI" },
+  "observability": { "enabled": true }
+}
