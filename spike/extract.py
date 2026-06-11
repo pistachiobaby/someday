@@ -69,7 +69,9 @@ class Ocr:
 
     def __init__(self):
         from paddleocr import PaddleOCR
-        kw = dict(use_textline_orientation=True)
+        # enable_mkldnn=False: paddlepaddle's oneDNN path crashes with
+        # "ConvertPirAttribute2RuntimeAttribute not support" on this CPU
+        kw = dict(use_textline_orientation=True, enable_mkldnn=False)
         self.engines = {
             "japan": PaddleOCR(lang="japan", **kw),
             "en": PaddleOCR(lang="en", **kw),
