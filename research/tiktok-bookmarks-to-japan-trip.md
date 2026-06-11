@@ -9,7 +9,7 @@
 ## TL;DR
 
 1. **There is no official TikTok API an individual can use to read their bookmarks.** The Display API has no favorites endpoint at all; the Research API is academic-only (and also lacks favorites); the only API that includes favorites — the EU DMA "Data Portability API" — is restricted to EEA/UK user accounts and gated behind a product-grade privacy review. *(Detail in §1.)*
-2. **The practical path is TikTok's "Download Your Data" export** (Settings → Account → Download your data → JSON). It contains your favorites as a list of `{date, URL}` pairs. Request it now — it takes anywhere from minutes to a few days, and the link expires 4 days after it's ready.
+2. **The practical, phone-native path is the collections workaround**: in the TikTok app, bulk-select your favorites into 1–3 collections ("Manage videos" supports multi-select), toggle them shareable/public, copy the links — then `yt-dlp` reads the whole list from each public collection URL with no login, no extension, no waiting. Works identically from iOS and Android, ~20–40 min for 300 bookmarks.
 3. **`yt-dlp` then downloads every video + rich metadata** (caption, hashtags, creator, music info, auto-captions) from that URL list — no login or scraping of your account needed, low risk at this scale.
 4. **Location extraction is a multi-signal problem**: on-screen overlay text (the highest-value signal — ffmpeg frame sampling + **local PaddleOCR**, free), caption + hashtags (cheap prior), and speech (transcribe only videos with original audio; ~$2 total or free locally). A tiny text-only LLM pass (<$1) fuses the signals into structured place entities.
 5. **Geocode with Google Places Text Search (New)** — free at this scale, and the only geocoder that reliably resolves both "Ichiran Shibuya" and "チームラボプラネッツ". Output one KML → import to **Google My Maps** (planning) and **Organic Maps** (offline on-phone in Japan), plus an LLM-clustered day-by-day itinerary in Markdown.
@@ -31,27 +31,36 @@ Sources: [developers.tiktok.com Display API overview](https://developers.tiktok.
 
 **Bottom line: effectively no.** TikTok deliberately exposes bookmarks only through GDPR/DMA-style data export channels, not developer APIs.
 
-### 1.2 The official "Download Your Data" export — the recommended source
+### 1.2 The collections workaround — recommended (phone-native, no wait, no extension)
 
-- **Request flow:** TikTok app → Profile → ☰ → *Settings and privacy* → *Account* → *Download your data* → choose **JSON** → select data (at minimum "Activity"/"Likes and Favorites") → Request.
-- **What you get:** `user_data_tiktok.json` with bookmarks at `["Likes and Favorites"]["Favorite Videos"]["FavoriteVideoList"]` — each entry is just a `Date` and a `Link` (a short share URL, typically of the form `tiktokv.com/share/video/<id>/`, which redirects to the canonical video page). **No caption, creator, or metadata** — that's what the download step (§2) recovers. Key names have varied slightly across export vintages (`Link`/`link`/`VideoLink`), so parse defensively.
-- **Timing:** ready in minutes to a few days (commonly 1–4 days). **The download link expires 4 days after the file is ready** — grab it promptly.
-- **Caveats:** deleted/private videos still appear but their links 404; expect a few dead entries.
+The TikTok app itself provides everything needed, on both iOS and Android:
 
-Sources: parser source of [samirelanduk/tiktok-save](https://github.com/samirelanduk/tiktok-save), [PIRG export guide](https://pirg.org/edfund/resources/how-to-request-and-download-tiktok-data/), [scrolldecoded export guide](https://www.scrolldecoded.com/blog/tiktok-data-export-guide/).
+1. **In the app:** Profile → Favorites (bookmark tab) → Collections → create a collection (1–3 are enough, e.g. by city). Use **"Manage videos"** to **bulk-select** favorites (tap-select many at once, then Move/Add) — not one-by-one. ~20–40 min for 300 bookmarks.
+2. **Make each collection shareable/public** and copy its link ("Share this collection"). Public collections get a web URL of the form `https://www.tiktok.com/@<user>/collection/<title>-<id>`.
+3. **On any machine** (laptop, or even Termux/iSH on the phone): yt-dlp's `tiktok:collection` extractor (verified in source, added May 2024) reads the entire collection **without any login or cookies**:
+   ```bash
+   yt-dlp --flat-playlist --print webpage_url "https://www.tiktok.com/@you/collection/Japan-7111..."
+   ```
+   …or skip the URL-listing step and feed the collection URL straight into the download command in §2.
+4. Flip the collections back to private afterward.
 
-> **Action item #1 (do this today):** request the data export, since it's the long pole. Everything else can be built while waiting.
+**Trade-off:** your favorites are briefly publicly visible (to anyone with the link / profile visitors) while the collections are public. Minutes of exposure for a trip-planning list is a non-issue for most people, but worth knowing.
 
-### 1.3 Unofficial alternatives (if you don't want to wait, or for re-runs)
+Sources: [yt-dlp tiktok.py — TikTokCollectionIE](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/tiktok.py) ([commit](https://github.com/yt-dlp/yt-dlp/commit/119d41f27061d220d276a2d38cfc8d873437452a)), [Minter.io collections guide](https://minter.io/blog/how-to-create-edit-and-delete-tiktok-collections/), [ScreenRant on bulk-organizing favorites](https://screenrant.com/organize-tiktok-favorites-collections-how/).
 
-- **tiktok-to-ytdlp browser extension / console script** ([dinoosauro/tiktok-to-ytdlp](https://github.com/dinoosauro/tiktok-to-ytdlp), actively maintained): auto-scrolls your logged-in Favorites tab and exports a `TikTokLinks.txt` URL list (optionally with captions). Runs in your own browser session — no credentials handed to third parties. Slightly higher (still small) risk than the export.
-- **yt-dlp native favorites support is coming but not merged**: there is no `tiktok:favorites` extractor today; [PR #16303](https://github.com/yt-dlp/yt-dlp/pull/16303) adds `TikTokSavedIE` (`tiktok.com/saved` with cookies) and was still open as of mid-2026. If it merges, `yt-dlp --cookies-from-browser firefox "https://www.tiktok.com/saved/"` becomes a one-step solution. **Workaround that works today:** move bookmarks into a named public *collection* — `tiktok:collection` is a working extractor.
-- **TikTokApi (davidteather)** is actively maintained but **explicitly does not support authenticated routes** — it cannot see your private favorites. Not useful here.
-- **Apify actors / tikwm-style APIs / Dewey / 4K Tokkit**: viable commercial/paid paths, but unnecessary cost or third-party-cookie exposure at this scale.
+> **Action item #1:** in the TikTok app, bulk-move your Japan bookmarks into collections and copy the share links. That's the only manual step in the whole pipeline.
+
+### 1.3 Other extraction options, ranked
+
+- **Android phone-only: Firefox for Android + tiktok-to-ytdlp add-on.** Firefox Android has supported open extensions since Dec 2023, and [tiktok-to-ytdlp has a dedicated Android listing](https://addons.mozilla.org/en-US/android/addon/tiktok-to-ytdlp/) (v1.4.1, updated Jan 2026). Log into tiktok.com (request desktop site), open the Favorites page, let it auto-scroll and export a `.txt` of URLs. Caveat: TikTok's logged-in web favorites view is desktop-oriented — mobile browsers usually need desktop-mode, which makes this fragile.
+- **iOS phone-only: weak.** Orion Browser can install Firefox/Chrome extensions but support is explicitly experimental — the add-on may not work. No Safari extension exists for this. iOS Shortcuts are one-video-at-a-time only (no bulk favorites access). On iOS, use the collections workaround.
+- **"Download Your Data" export** (Settings → Account → Download your data → JSON): the zero-scraping fallback. Favorites land at `["Likes and Favorites"]["Favorite Videos"]["FavoriteVideoList"]` as date+link pairs — but it takes minutes to days to arrive and the link expires 4 days after it's ready. Use only if the collections route is unappealing.
+- **yt-dlp native favorites support is coming but not merged**: [PR #16303](https://github.com/yt-dlp/yt-dlp/pull/16303) adds `TikTokSavedIE` (`tiktok.com/saved` with cookies); still open as of mid-2026. If it merges, favorites become a one-liner with browser cookies.
+- **Not recommended:** TikTokApi (no authenticated routes — can't see private favorites), Dewey (desktop-Chrome-only sync), 4K Tokkit and similar apps that want your TikTok login (credential/ToS exposure), Apify/tikwm (unnecessary at this scale). Kiwi Browser is discontinued.
 
 ### 1.4 Terms-of-service & risk
 
-TikTok's ToS prohibits automated scraping, and all unofficial tools technically violate it. Realistically, for 50–300 of your own bookmarks: enforcement reports concern high-volume scraping; the practical failure modes are captchas, temporary blocks, and tool breakage — not account bans (no documented bans for low-volume personal downloading were found, though that's absence-of-evidence). Mitigations: use the official export for the *list* (zero scraping), throttle downloads, run from a residential IP, don't hand session cookies to third-party services. The download step itself needs no login for public videos.
+TikTok's ToS prohibits automated scraping, and all unofficial tools technically violate it. Realistically, for 50–300 of your own bookmarks: enforcement reports concern high-volume scraping; the practical failure modes are captchas, temporary blocks, and tool breakage — not account bans (no documented bans for low-volume personal downloading were found, though that's absence-of-evidence). Mitigations: the collections route needs no login at all for the fetch (public collection, anonymous yt-dlp), throttle downloads, run from a residential IP, don't hand session cookies to third-party services.
 
 ---
 
@@ -60,7 +69,7 @@ TikTok's ToS prohibits automated scraping, and all unofficial tools technically 
 **Tool: `yt-dlp`** (install with `pip install "yt-dlp[default,curl-cffi]"` — the `curl_cffi` TLS impersonation extra is effectively required for reliable TikTok; keep yt-dlp updated since TikTok broke extraction twice in late 2025 before [PR #15672](https://github.com/yt-dlp/yt-dlp/pull/15672) fixed it in Jan 2026).
 
 ```bash
-yt-dlp -a favorites.txt \
+yt-dlp "https://www.tiktok.com/@you/collection/Japan-7111..." \
   --write-info-json --write-subs \
   --download-archive done.txt \
   --sleep-requests 1 --min-sleep-interval 1 --max-sleep-interval 3 \
@@ -68,7 +77,7 @@ yt-dlp -a favorites.txt \
   -o "videos/%(uploader)s_%(id)s.%(ext)s"
 ```
 
-- `-a favorites.txt`: the URL list from the export (the short `tiktokv.com/share/video/<id>/` links work — yt-dlp follows redirects).
+- Pass each public collection URL directly (the `tiktok:collection` extractor paginates the whole collection, no cookies needed). If you instead have a flat URL list (extension or data-export route), use `-a favorites.txt` — short share links work, yt-dlp follows redirects.
 - `--write-info-json` gives per-video: **full caption incl. hashtags** (`description`), uploader, timestamps, view/like counts, and **music metadata** — including whether the track is `original sound - <creator>` vs a matched commercial song (the key signal for "is there narration worth transcribing").
 - `--write-subs` grabs TikTok's **auto-generated speech captions** when present (`creator_caption` / auto captions) — free transcription for some videos.
 - `--download-archive` makes the run resumable; a handful of 404s (deleted videos) is expected.
@@ -153,10 +162,11 @@ Structured outputs guarantee schema-valid JSON, so the geocoding stage can consu
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│ 0. ACQUIRE   TikTok "Download Your Data" (JSON) ──► favorites.txt   │
-│              (fallback: tiktok-to-ytdlp extension on Favorites tab) │
+│ 0. ACQUIRE   TikTok app: bulk-move favorites → public collections   │
+│              → collection URLs (fallbacks: Firefox-Android extension,│
+│              "Download Your Data" export)                            │
 ├─────────────────────────────────────────────────────────────────────┤
-│ 1. DOWNLOAD  yt-dlp -a favorites.txt --write-info-json --write-subs │
+│ 1. DOWNLOAD  yt-dlp <collection-url> --write-info-json --write-subs │
 │              → videos/*.mp4 + *.info.json (+ auto-captions)         │
 │              (optional: pyktok pass for stickerText / locationCreated)│
 ├─────────────────────────────────────────────────────────────────────┤
@@ -207,7 +217,7 @@ Consumer apps already solve a shallow version of this — worth knowing as a san
 
 | Risk | Mitigation |
 |---|---|
-| Export takes days / link expires in 4 days | Request export **now**; download promptly; keep `favorites.txt` in the repo (it's just URLs + dates) |
+| Favorites briefly public during collections workaround | Make collections public only for the minutes the fetch runs, then flip back to private |
 | yt-dlp TikTok breakage (recurring) | Pin a known-good nightly; `--download-archive` makes retries cheap; tikwm as per-URL fallback |
 | Deleted/private videos | Expect a few 404s; log and report them in the planning doc |
 | Whisper hallucination on music | Silero VAD gate + `no_speech_threshold` + music-metadata triage |
@@ -219,7 +229,7 @@ Consumer apps already solve a shallow version of this — worth knowing as a san
 
 ## 9. Proposed build plan (next session)
 
-1. **You:** request the TikTok data export (JSON) today.
+1. **You (in the TikTok app, ~30 min):** bulk-move your Japan bookmarks into 1–3 collections via "Manage videos", make them shareable, and copy the collection links.
 2. **Repo scaffold:** Python project with stages as CLI subcommands (`ingest`, `download`, `transcribe`, `frames`, `extract`, `geocode`, `render`), a `places.json` ledger, and config for API keys (Anthropic, OpenAI optional, Google Maps Platform).
 3. **First slice:** run the full pipeline end-to-end on 5–10 sample TikTok URLs (no export needed — any Japan travel TikToks work) to validate extraction quality before the batch run.
 4. **Batch run** once the export arrives → review flagged places → generate KML + itinerary + trip doc.
