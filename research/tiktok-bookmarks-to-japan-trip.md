@@ -11,9 +11,9 @@
 1. **There is no official TikTok API an individual can use to read their bookmarks.** The Display API has no favorites endpoint at all; the Research API is academic-only (and also lacks favorites); the only API that includes favorites — the EU DMA "Data Portability API" — is restricted to EEA/UK user accounts and gated behind a product-grade privacy review. *(Detail in §1.)*
 2. **The practical path is TikTok's "Download Your Data" export** (Settings → Account → Download your data → JSON). It contains your favorites as a list of `{date, URL}` pairs. Request it now — it takes anywhere from minutes to a few days, and the link expires 4 days after it's ready.
 3. **`yt-dlp` then downloads every video + rich metadata** (caption, hashtags, creator, music info, auto-captions) from that URL list — no login or scraping of your account needed, low risk at this scale.
-4. **Location extraction is a multi-signal problem**: on-screen overlay text (the highest-value signal, read from sampled frames by a vision LLM), caption + hashtags (cheap prior), and speech (transcribe only videos with original audio; ~$2 total or free locally).
+4. **Location extraction is a multi-signal problem**: on-screen overlay text (the highest-value signal — ffmpeg frame sampling + **local PaddleOCR**, free), caption + hashtags (cheap prior), and speech (transcribe only videos with original audio; ~$2 total or free locally). A tiny text-only LLM pass (<$1) fuses the signals into structured place entities.
 5. **Geocode with Google Places Text Search (New)** — free at this scale, and the only geocoder that reliably resolves both "Ichiran Shibuya" and "チームラボプラネッツ". Output one KML → import to **Google My Maps** (planning) and **Organic Maps** (offline on-phone in Japan), plus an LLM-clustered day-by-day itinerary in Markdown.
-6. **Total cost: roughly $5–25 in API calls for 300 videos**; the pipeline is a few hundred lines of Python. Consumer apps (Triply, TripTok, TokSpot) do a shallow version of this, but nothing open-source does it end-to-end — building it is justified.
+6. **Total cost: roughly $1–3 in API calls for 300 videos** (OCR and frame extraction run locally for free); the pipeline is a few hundred lines of Python. Consumer apps (Triply, TripTok, TokSpot) do a shallow version of this, but nothing open-source does it end-to-end — building it is justified.
 
 ---
 
@@ -81,14 +81,15 @@ yt-dlp -a favorites.txt \
 
 Three signal sources, in descending order of value for Japan travel TikToks:
 
-### 3.1 On-screen overlay text + visuals (the main event)
+### 3.1 On-screen overlay text (OCR-first — the main event)
 
 Travel TikToks ("7 hidden gems in Kyoto") typically name the individual places **only in burned-in overlay text and/or voiceover** — the caption usually names just the city. So frame analysis carries most of the weight.
 
-- **Claude (and most LLM APIs) do not accept video input** — the standard pattern is ffmpeg frame sampling → images in one request. Gemini accepts video natively (and hears audio), making it a viable lower-friction alternative; see cost table in §6.
-- **Frame sampling:** scene-change detection beats fixed-rate for cut-heavy TikToks: `ffmpeg -i v.mp4 -vf "select='gt(scene,0.3)'" -vsync vfr frames/%03d.jpg`, fall back to 1 fps. 8–20 frames per video is plenty. Pre-resize to ~768–1092 px long edge (≈ 1,000–1,600 tokens/image at Claude's ~w×h/750 token formula).
-- **Reading the text:** a frontier vision model reads stylized mixed Japanese/English overlay text *and* interprets it in context ("📍渋谷 nonbei yokocho" → place entity) — dedicated OCR is unnecessary at this scale. (If ever needed, PaddleOCR ≫ Tesseract for Japanese scene text.)
-- **Landmark recognition** (frames with no text): frontier models reliably recognize famous Japanese landmarks (Fushimi Inari, Shibuya Crossing) but not specific small restaurants — which is fine, because the Places-API validation step (§4) does the precision work. Skip Google Cloud Vision landmark detection; it adds nothing here.
+**Approach: local OCR on sampled frames — free.**
+
+- **Frame sampling:** scene-change detection beats fixed-rate for cut-heavy TikToks: `ffmpeg -i v.mp4 -vf "select='gt(scene,0.3)'" -vsync vfr frames/%03d.jpg`, fall back to 1 fps. 8–20 frames per video is plenty.
+- **OCR engine: PaddleOCR** with the Japanese + English models — clearly the best open-source choice for stylized CJK scene text (~92% word accuracy vs ~76% for Tesseract, which is tuned for clean document scans, not video overlays). Runs on CPU, no API cost. Per frame it returns text lines + confidence; dedupe repeated lines across a video's frames (overlay text persists across many frames, which actually helps — take the highest-confidence read of each line).
+- **What OCR-only gives up vs a vision LLM:** (a) no landmark recognition for videos with *zero* text (montage-only clips) — mitigation: flag "no text found" videos for a quick manual skim, or optionally run a vision pass on just that small subset; (b) heavily stylized/animated fonts will sometimes garble — the geocoding step's fuzzy matching (Places Text Search interprets queries, it doesn't string-match) absorbs a lot of this, and the confidence field flags the rest. For a personal trip-planning run these are acceptable trade-offs for ~$15 saved.
 
 ### 3.2 Caption, hashtags, and platform metadata (cheap priors)
 
@@ -103,7 +104,7 @@ Always feed the model: `description` (caption + hashtags), uploader handle, musi
 
 ### 3.4 Fusing signals into structured place entities
 
-One LLM call per video (Claude Messages API, **Batches API for the 50% discount** since this is an offline pipeline): caption + hashtags + sticker metadata + transcript + 8–20 frames in, **structured output** (`output_config.format` json_schema, or `client.messages.parse()` with a Pydantic model) out:
+With OCR doing the visual heavy lifting, the fusion step is **text-only and nearly free**: one small-model call per video (e.g. Haiku via the Batches API — ~1–2K input tokens each, ≈ **$0.30–0.60 total for 300 videos**) takes OCR lines + caption + hashtags + sticker metadata + transcript and emits structured place entities (`output_config.format` json_schema, or `client.messages.parse()` with a Pydantic model). A pure-regex/heuristic version is possible but not worth it — the LLM pass is what turns "📍渋谷 nonbei yokocho" + a garbled OCR line into a clean queryable entity, and at under a dollar it's the cheapest component in the pipeline:
 
 ```json
 {
@@ -162,10 +163,12 @@ Structured outputs guarantee schema-valid JSON, so the geocoding stage can consu
 │ 2. AUDIO     music-metadata triage → Silero VAD gate →              │
 │              gpt-4o-transcribe (or faster-whisper) → transcript     │
 ├─────────────────────────────────────────────────────────────────────┤
-│ 3. FRAMES    ffmpeg scene-change sampling → 8–20 jpgs @ ~1024px     │
+│ 3. FRAMES    ffmpeg scene-change sampling → 8–20 jpgs/video         │
+│              → PaddleOCR (ja+en, local, free) → deduped text lines  │
 ├─────────────────────────────────────────────────────────────────────┤
-│ 4. EXTRACT   1 Claude call/video (Batches API, structured outputs): │
-│              frames + caption + hashtags + transcript → places[]    │
+│ 4. EXTRACT   1 small text-only LLM call/video (Batches API,         │
+│              structured outputs): OCR lines + caption + hashtags    │
+│              + transcript → places[]                                │
 ├─────────────────────────────────────────────────────────────────────┤
 │ 5. GEOCODE   Google Places Text Search (New) + validation/flagging  │
 ├─────────────────────────────────────────────────────────────────────┤
@@ -180,14 +183,17 @@ Each stage writes to disk and is independently re-runnable (re-run extraction wi
 
 | Item | Estimate |
 |---|---|
-| Data export + yt-dlp download | $0 (a few hours wall time, mostly waiting on the export) |
-| Transcription (~5 h audio after VAD skips) | **~$1–2** cloud, or $0 local |
-| Vision+extraction LLM calls (300 × ~15 frames ≈ 23K image tokens + text ≈ 7–8M input tokens, small output) | **Haiku 4.5: ~$4 (~$2 batched)** · Sonnet 4.6: ~$11 batched · Opus 4.8: ~$19 batched. Recommended: **Sonnet 4.6 batched (~$11)** for extraction quality on stylized Japanese text; Haiku for a cheap first pass. *(Gemini Flash native-video alternative: ~$1–3 total, single call/video incl. audio — worth considering if simplicity beats staying on one stack.)* |
+| Bookmark list + yt-dlp download | $0 |
+| Frame extraction + PaddleOCR (local) | **$0** (CPU-only is fine; ~1–3 s/frame, a batch run finishes in an hour or two) |
+| Transcription (~5 h audio after VAD skips) | **~$1–2** cloud (`gpt-4o-transcribe`), or **$0** local (faster-whisper) |
+| Entity-fusion LLM calls (300 × ~1–2K text tokens, Haiku batched) | **~$0.30–0.60** |
 | Geocoding (≈300–600 Text Search calls) | **$0** (within 5K/month free Pro tier) |
 | KML/itinerary generation | ~$0.10–0.50 of LLM calls |
-| **Total** | **≈ $5–25** depending on model choice |
+| **Total** | **≈ $1–3** (or ~$0.50 fully-local transcription) |
 
-Engineering effort: a few hundred lines of Python (`yt-dlp` + `ffmpeg` + `anthropic` + `requests` + `simplekml`), realistically 1–2 focused sessions to a working end-to-end run, plus a human-review pass over flagged/low-confidence places.
+*(Dropped alternative for reference: a vision-LLM pass instead of OCR — frames as images to Haiku/Sonnet — would run ~$2–11 batched and add landmark recognition for text-free videos. Worth keeping in the back pocket as a targeted second pass over only the videos where OCR finds nothing.)*
+
+Engineering effort: a few hundred lines of Python (`yt-dlp` + `ffmpeg` + `paddleocr` + `anthropic` + `requests` + `simplekml`), realistically 1–2 focused sessions to a working end-to-end run, plus a human-review pass over flagged/low-confidence places.
 
 ---
 
