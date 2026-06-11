@@ -26,7 +26,7 @@
     {
       "binding": "DB",
       "database_name": "someday",
-      "database_id": "TODO-run: wrangler d1 create someday"
+      "database_id": "50ce7c15-fb93-4014-95a2-e44d9ec79fa4"
     }
   ],
   "ai": { "binding": "AI" },
