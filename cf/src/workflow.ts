@@ -123,8 +123,11 @@ export class VideoPipeline extends WorkflowEntrypoint<Env, Params> {
         ];
         let raw: unknown;
         try {
+          // max_tokens: the default (~256) truncates place-heavy videos,
+          // which surfaces as AiError 5024 / unparseable JSON.
           const out = await this.env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
             messages,
+            max_tokens: 2048,
             response_format: { type: "json_schema", json_schema: PLACES_SCHEMA },
           }) as string | { response?: unknown };
           raw = typeof out === "string" ? out : out.response;
@@ -132,6 +135,7 @@ export class VideoPipeline extends WorkflowEntrypoint<Env, Params> {
           // Strict JSON mode fails on some inputs (AiError 5024); fall back
           // to a plain prompt and pull the JSON object out of the text.
           const out = await this.env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
+            max_tokens: 2048,
             messages: [
               ...messages,
               {
