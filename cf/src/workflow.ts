@@ -64,7 +64,7 @@ export class VideoPipeline extends WorkflowEntrypoint<Env, Params> {
       //    serializes it, so queued requests wait behind shard-mates.
       const processed = await step.do(
         "download+ocr",
-        { retries: { limit: 3, delay: "30 seconds", backoff: "exponential" }, timeout: "30 minutes" },
+        { retries: { limit: 6, delay: "1 minute", backoff: "exponential" }, timeout: "30 minutes" },
         async (): Promise<ProcessResult> => {
           const res = await getContainer(this.env.PROCESSOR, shard).fetch(
             "http://container/process",

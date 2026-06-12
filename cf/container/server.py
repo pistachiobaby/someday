@@ -207,18 +207,25 @@ def extract_audio(video: Path, out: Path) -> bool:
 
 
 def ocr_frames(frames: list[Path]) -> list[dict]:
+    # Hold the lock for the WHOLE video: per-frame locking interleaves
+    # concurrent requests so fairly that under contention every request
+    # slows past the workflow step timeout and none completes. One video
+    # OCRs start-to-finish; waiters time out into a 503 and the workflow
+    # retries with backoff (also keeps a hung Paddle call from wedging
+    # every thread).
+    if not _ocr_lock.acquire(timeout=900):
+        raise OcrBusy()
+    try:
+        return _ocr_frames_locked(frames)
+    finally:
+        _ocr_lock.release()
+
+
+def _ocr_frames_locked(frames: list[Path]) -> list[dict]:
     best = {}
     for frame in frames:
         for engine in engines():
-            # Fail fast instead of queueing forever if a Paddle call hangs
-            # while holding the lock — a 503 lets the workflow retry, and the
-            # instance stays responsive instead of wedging all threads.
-            if not _ocr_lock.acquire(timeout=900):
-                raise OcrBusy()
-            try:
-                results = engine.predict(str(frame)) or []
-            finally:
-                _ocr_lock.release()
+            results = engine.predict(str(frame)) or []
             for result in results:
                 for text, score in zip(result.get("rec_texts", []),
                                        result.get("rec_scores", [])):
