@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_file
@@ -30,6 +31,8 @@ app = Flask(__name__)
 # enable_mkldnn=False: paddle's oneDNN path crashes on some CPUs
 # ("ConvertPirAttribute2RuntimeAttribute not support").
 _engines = None
+# Paddle predictors aren't thread-safe; serialize OCR across worker threads.
+_ocr_lock = threading.Lock()
 
 
 def engines():
@@ -81,6 +84,7 @@ def process():
 
     res = ytdlp(
         ["--write-info-json", "--write-subs", "--sub-langs", "all",
+         "--write-thumbnail",
          "-f", "best[height<=720]/best", "-o", str(job / "video.%(ext)s"), url],
         proxy=body.get("proxy"),
     )
@@ -89,7 +93,11 @@ def process():
         gone = "404" in err or "private" in err.lower() or "unavailable" in err.lower()
         return err, 410 if gone else 502
 
-    video = next(job.glob("video.mp4"), None) or next(job.glob("video.*"), None)
+    media = next(
+        (p for p in job.glob("video.*")
+         if p.suffix.lower() in {".mp4", ".webm", ".mov", ".mkv", ".mp3", ".m4a"}),
+        None,
+    )
     info = json.loads((job / "video.info.json").read_text(encoding="utf-8"))
     meta = {
         "caption": info.get("description", ""),
@@ -101,14 +109,20 @@ def process():
     vtt = next(job.glob("*.vtt"), None)
     auto_captions = parse_vtt(vtt) if vtt else None
 
-    frames = extract_frames(video, job / "frames")
+    if media is not None and has_video_stream(media):
+        frames = extract_frames(media, job / "frames")
+    else:
+        # Photo posts: yt-dlp only exposes the audio track, so OCR what we
+        # have — the cover thumbnail. (Slide images aren't downloadable.)
+        frames = thumbnail_frames(job)
     ocr_lines = ocr_frames(frames)
 
-    has_audio = extract_audio(video, job / "audio.mp3")
+    has_audio = media is not None and extract_audio(media, job / "audio.mp3")
 
     # Keep only what later steps need; frames/video are large.
     shutil.rmtree(job / "frames", ignore_errors=True)
-    video.unlink(missing_ok=True)
+    if media is not None:
+        media.unlink(missing_ok=True)
 
     return jsonify({
         "meta": meta,
@@ -124,6 +138,33 @@ def audio(vid):
     if not path.exists():
         return "no audio", 404
     return send_file(path, mimetype="audio/mpeg")
+
+
+def has_video_stream(path: Path) -> bool:
+    res = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v",
+         "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True,
+    )
+    return "video" in res.stdout
+
+
+def thumbnail_frames(job: Path) -> list[Path]:
+    frames = []
+    for p in job.glob("video.*"):
+        suffix = p.suffix.lower()
+        if suffix in {".jpg", ".jpeg", ".png"}:
+            frames.append(p)
+        elif suffix in {".webp", ".image"}:
+            jpg = p.with_suffix(".thumb.jpg")
+            subprocess.run(
+                ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                 "-i", str(p), str(jpg)],
+                capture_output=True,
+            )
+            if jpg.exists():
+                frames.append(jpg)
+    return frames
 
 
 def extract_frames(video: Path, frames_dir: Path) -> list[Path]:
@@ -160,7 +201,9 @@ def ocr_frames(frames: list[Path]) -> list[dict]:
     best = {}
     for frame in frames:
         for engine in engines():
-            for result in engine.predict(str(frame)) or []:
+            with _ocr_lock:
+                results = engine.predict(str(frame)) or []
+            for result in results:
                 for text, score in zip(result.get("rec_texts", []),
                                        result.get("rec_scores", [])):
                     text = text.strip()
@@ -186,4 +229,6 @@ def parse_vtt(vtt: Path) -> str:
 
 if __name__ == "__main__":
     from waitress import serve
-    serve(app, host="0.0.0.0", port=8080, threads=2, channel_timeout=600)
+    # Enough threads that /list and /healthz aren't starved by long-running
+    # /process requests; OCR itself is serialized by _ocr_lock.
+    serve(app, host="0.0.0.0", port=8080, threads=4, channel_timeout=600)
