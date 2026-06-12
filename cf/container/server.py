@@ -28,6 +28,15 @@ OCR_MIN_CONFIDENCE = 0.65
 
 app = Flask(__name__)
 
+
+class OcrBusy(Exception):
+    pass
+
+
+@app.errorhandler(OcrBusy)
+def ocr_busy(_e):
+    return "ocr engine busy/stuck; retry later", 503
+
 # enable_mkldnn=False: paddle's oneDNN path crashes on some CPUs
 # ("ConvertPirAttribute2RuntimeAttribute not support").
 _engines = None
@@ -201,8 +210,15 @@ def ocr_frames(frames: list[Path]) -> list[dict]:
     best = {}
     for frame in frames:
         for engine in engines():
-            with _ocr_lock:
+            # Fail fast instead of queueing forever if a Paddle call hangs
+            # while holding the lock — a 503 lets the workflow retry, and the
+            # instance stays responsive instead of wedging all threads.
+            if not _ocr_lock.acquire(timeout=900):
+                raise OcrBusy()
+            try:
                 results = engine.predict(str(frame)) or []
+            finally:
+                _ocr_lock.release()
             for result in results:
                 for text, score in zip(result.get("rec_texts", []),
                                        result.get("rec_scores", [])):
