@@ -48,6 +48,63 @@ ${folders}
 </Document></kml>`;
 }
 
+// Self-contained interactive map (Leaflet + OSM tiles, no API key) for
+// phones/browsers; My Maps has no import API, so this is the shareable link.
+export async function renderMapHtml(db: D1Database): Promise<string> {
+  const places = (await loadPlaces(db)).filter((p) => p.lat != null);
+  const markers = places.map((p) => ({
+    lat: p.lat, lng: p.lng,
+    name: p.resolved_name ?? p.name,
+    city: p.city, category: p.category, confidence: p.confidence,
+    quote: p.evidence_quote, address: p.address,
+    gmaps: p.place_id
+      ? `https://www.google.com/maps/place/?q=place_id:${p.place_id}`
+      : null,
+    video: p.video_url,
+    flagged: p.geocode_status === "ambiguous",
+  }));
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Japan trip — ${places.length} places from TikTok bookmarks</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  html, body, #map { height: 100%; margin: 0; }
+  .popup h3 { margin: 0 0 4px; font-size: 14px; }
+  .popup { font: 13px/1.4 system-ui, sans-serif; max-width: 240px; }
+  .popup .quote { color: #555; font-style: italic; }
+  .popup .flag { color: #b45309; font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+  const places = ${JSON.stringify(markers)};
+  const map = L.map("map");
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  }).addTo(map);
+  const esc = (s) => (s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  const group = L.featureGroup(places.map((p) => L.marker([p.lat, p.lng]).bindPopup(
+    '<div class="popup"><h3>' + esc(p.name) + "</h3>" +
+    (p.flagged ? '<div class="flag">⚠️ verify branch</div>' : "") +
+    esc([p.category, p.city].filter(Boolean).join(" · ")) +
+    (p.quote ? '<div class="quote">“' + esc(p.quote) + "”</div>" : "") +
+    (p.address ? "<div>" + esc(p.address) + "</div>" : "") +
+    (p.gmaps ? '<a href="' + p.gmaps + '" target="_blank">open in Google Maps</a> · ' : "") +
+    '<a href="' + p.video + '" target="_blank">source tiktok</a></div>',
+  ))).addTo(map);
+  map.fitBounds(group.getBounds().pad(0.1));
+</script>
+</body>
+</html>`;
+}
+
 export async function renderTripDoc(db: D1Database): Promise<string> {
   const places = await loadPlaces(db);
   const lines = ["# Japan trip — places from TikTok bookmarks\n"];

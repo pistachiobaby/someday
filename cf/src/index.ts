@@ -1,6 +1,6 @@
 import { Container, getContainer } from "@cloudflare/containers";
 export { VideoPipeline } from "./workflow";
-import { renderKml, renderTripDoc } from "./render";
+import { renderKml, renderMapHtml, renderTripDoc } from "./render";
 
 export class Processor extends Container<Env> {
   defaultPort = 8080;
@@ -29,7 +29,11 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    if (request.headers.get("authorization") !== `Bearer ${env.API_TOKEN}`) {
+    // ?token= lets the map/doc outputs work as plain links on a phone.
+    if (
+      request.headers.get("authorization") !== `Bearer ${env.API_TOKEN}` &&
+      url.searchParams.get("token") !== env.API_TOKEN
+    ) {
       return new Response("unauthorized", { status: 401 });
     }
 
@@ -93,6 +97,12 @@ export default {
          FROM places p JOIN videos v ON v.id = p.video_id ORDER BY p.city, p.name`,
       ).all();
       return Response.json(results);
+    }
+
+    if (url.pathname === "/outputs/map.html") {
+      return new Response(await renderMapHtml(env.DB), {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
     }
 
     if (url.pathname === "/outputs/map.kml") {
