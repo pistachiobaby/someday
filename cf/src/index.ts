@@ -101,7 +101,12 @@ export default {
 
     if (url.pathname === "/outputs/map.html") {
       return new Response(await renderMapHtml(env.DB), {
-        headers: { "content-type": "text/html; charset=utf-8" },
+        // no-store: browsers heuristically cache responses without
+        // validators and then serve stale UI on refresh.
+        headers: {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-store",
+        },
       });
     }
 
