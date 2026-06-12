@@ -150,8 +150,15 @@ export class VideoPipeline extends WorkflowEntrypoint<Env, Params> {
           const text = typeof out === "string" ? out : String(out.response ?? "");
           raw = text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
         }
-        const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-        return (parsed as { places: Place[] }).places.map((p) => ({
+        // If the model failed to produce JSON twice, finish the video with
+        // no places rather than erroring it — signals stay in D1 for review.
+        let parsed: { places?: Place[] };
+        try {
+          parsed = (typeof raw === "string" ? JSON.parse(raw) : raw) as { places?: Place[] };
+        } catch {
+          return [];
+        }
+        return (parsed.places ?? []).map((p) => ({
           ...p,
           name_japanese: p.name_japanese || null,
           city: p.city || null,
