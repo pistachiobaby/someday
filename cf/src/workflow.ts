@@ -126,10 +126,13 @@ export class VideoPipeline extends WorkflowEntrypoint<Env, Params> {
               "shop names are often phonetically mangled by transcription: when a name " +
               "appears only in the transcript and no OCR/caption text corroborates it, " +
               "set confidence to 'medium' at most. Classify each place's role: " +
-              "'destination' when the video visits, reviews, or recommends it; " +
-              "'incidental' when it is only mentioned for transit or navigation " +
-              "(stations to ride through, 'turn at X', 'take the line from Y') or as " +
-              "a passing comparison — not somewhere the viewer is being told to go. " +
+              "'destination' when the video visits, reviews, recommends, ranks, or " +
+              "compares it — anything that gives the viewer a reason to go; " +
+              "'incidental' ONLY for pure travel logistics the viewer isn't being " +
+              "told to visit: stations or lines to ride through, airports, " +
+              "directions ('turn at X'), or naming the area the creator happens " +
+              "to be in. A place being compared or ranked against others is a " +
+              "destination, not incidental. " +
               "Set is_chain=true for chains/franchises with many branches (konbini " +
               "like Daily Yamazaki or 7-Eleven, chain restaurants, drugstores) where " +
               "no single branch is meant. Ignore fully generic mentions (e.g. " +
