@@ -10,11 +10,13 @@ Ported from spike/extract.py (see spike/sample-report.md for validation).
 """
 
 import json
+import multiprocessing
 import re
 import shutil
 import subprocess
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_file
@@ -37,20 +39,10 @@ class OcrBusy(Exception):
 def ocr_busy(_e):
     return "ocr engine busy/stuck; retry later", 503
 
-# enable_mkldnn=False: paddle's oneDNN path crashes on some CPUs
-# ("ConvertPirAttribute2RuntimeAttribute not support").
-_engines = None
-# Paddle predictors aren't thread-safe; serialize OCR across worker threads.
+# One video's OCR at a time per instance (memory + CPU bound).
 _ocr_lock = threading.Lock()
-
-
-def engines():
-    global _engines
-    if _engines is None:
-        from paddleocr import PaddleOCR
-        kw = dict(use_textline_orientation=True, enable_mkldnn=False)
-        _engines = [PaddleOCR(lang="japan", **kw), PaddleOCR(lang="en", **kw)]
-    return _engines
+OCR_LOCK_WAIT = 600  # s a request waits for its OCR turn before 503ing
+OCR_BUDGET = 900  # s of OCR per video before we kill it and degrade
 
 
 def ytdlp(args, proxy=None):
@@ -207,26 +199,48 @@ def extract_audio(video: Path, out: Path) -> bool:
 
 
 def ocr_frames(frames: list[Path]) -> list[dict]:
-    # Hold the lock for the WHOLE video: per-frame locking interleaves
-    # concurrent requests so fairly that under contention every request
-    # slows past the workflow step timeout and none completes. One video
-    # OCRs start-to-finish; waiters time out into a 503 and the workflow
-    # retries with backoff (also keeps a hung Paddle call from wedging
-    # every thread).
-    if not _ocr_lock.acquire(timeout=900):
+    # Paddle occasionally hangs forever in native code on some machines
+    # (we wedged a whole shard on this). Run each video's OCR in a fresh
+    # spawned subprocess with a hard budget: a hang gets killed and the
+    # video completes with no OCR lines (caption/transcript still flow)
+    # instead of timing out the workflow step forever.
+    if not _ocr_lock.acquire(timeout=OCR_LOCK_WAIT):
         raise OcrBusy()
     try:
-        return _ocr_frames_locked(frames)
+        ctx = multiprocessing.get_context("spawn")
+        parent, child = ctx.Pipe(duplex=False)
+        proc = ctx.Process(target=_ocr_worker, args=([str(f) for f in frames], child))
+        proc.start()
+        child.close()
+        out = None
+        deadline = time.time() + OCR_BUDGET
+        while time.time() < deadline:
+            if parent.poll(5):
+                out = parent.recv()
+                break
+            if not proc.is_alive():  # crashed without sending a result
+                break
+        if proc.is_alive():
+            proc.kill()
+        proc.join()
+        if out is None:
+            app.logger.error("OCR subprocess hung or crashed; no OCR lines")
+            return []
+        return out
     finally:
         _ocr_lock.release()
 
 
-def _ocr_frames_locked(frames: list[Path]) -> list[dict]:
+def _ocr_worker(frame_paths: list[str], conn) -> None:
+    from paddleocr import PaddleOCR
+    # enable_mkldnn=False: paddle's oneDNN path crashes on some CPUs
+    # ("ConvertPirAttribute2RuntimeAttribute not support").
+    kw = dict(use_textline_orientation=True, enable_mkldnn=False)
+    engines = [PaddleOCR(lang="japan", **kw), PaddleOCR(lang="en", **kw)]
     best = {}
-    for frame in frames:
-        for engine in engines():
-            results = engine.predict(str(frame)) or []
-            for result in results:
+    for fp in frame_paths:
+        for engine in engines:
+            for result in engine.predict(fp) or []:
                 for text, score in zip(result.get("rec_texts", []),
                                        result.get("rec_scores", [])):
                     text = text.strip()
@@ -235,7 +249,8 @@ def _ocr_frames_locked(frames: list[Path]) -> list[dict]:
                     key = re.sub(r"\W+", "", text.lower())
                     if key and (key not in best or score > best[key]["confidence"]):
                         best[key] = {"text": text, "confidence": round(float(score), 3)}
-    return sorted(best.values(), key=lambda r: -r["confidence"])
+    conn.send(sorted(best.values(), key=lambda r: -r["confidence"]))
+    conn.close()
 
 
 def parse_vtt(vtt: Path) -> str:
