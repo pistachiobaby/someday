@@ -115,9 +115,13 @@ export class VideoPipeline extends WorkflowEntrypoint<Env, Params> {
             content:
               "Extract every specific, visitable place in Japan referenced by signals " +
               "from one TikTok travel video. OCR lines and transcripts are noisy — " +
-              "reconstruct garbled names when context allows, and record the city/area " +
-              "when stated. Ignore generic mentions (e.g. 'convenience stores', " +
-              "'a ramen shop'). Return an empty list when there is no specific place.",
+              "reconstruct garbled names when context allows. Record the most specific " +
+              "area mentioned as city (e.g. 'Nakano, Tokyo', not just 'Tokyo'). Spoken " +
+              "shop names are often phonetically mangled by transcription: when a name " +
+              "appears only in the transcript and no OCR/caption text corroborates it, " +
+              "set confidence to 'medium' at most. Ignore generic mentions (e.g. " +
+              "'convenience stores', 'a ramen shop'). Return an empty list when there " +
+              "is no specific place.",
           },
           { role: "user", content: JSON.stringify(signals) },
         ];
