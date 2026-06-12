@@ -58,7 +58,9 @@ export async function renderMapHtml(db: D1Database): Promise<string> {
     city: p.city, category: p.category, confidence: p.confidence,
     quote: p.evidence_quote, address: p.address,
     gmaps: p.place_id
-      ? `https://www.google.com/maps/place/?q=place_id:${p.place_id}`
+      ? "https://www.google.com/maps/search/?api=1&query=" +
+        encodeURIComponent(p.resolved_name ?? p.name) +
+        `&query_place_id=${p.place_id}`
       : null,
     video: p.video_url,
     flagged: p.geocode_status === "ambiguous",
@@ -86,8 +88,11 @@ export async function renderMapHtml(db: D1Database): Promise<string> {
 <script>
   const places = ${JSON.stringify(markers)};
   const map = L.map("map");
-  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  // CARTO Voyager: OSM data with English/latin labels (default OSM tiles
+  // label Japan in Japanese).
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
+    subdomains: "abcd",
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
   }).addTo(map);
   const esc = (s) => (s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
   const group = L.featureGroup(places.map((p) => L.marker([p.lat, p.lng]).bindPopup(
@@ -118,7 +123,8 @@ export async function renderTripDoc(db: D1Database): Promise<string> {
     const name = p.resolved_name ?? p.name;
     const ja = p.name_japanese ? ` (${p.name_japanese})` : "";
     const maps = p.place_id
-      ? ` · [map](https://www.google.com/maps/place/?q=place_id:${p.place_id})`
+      ? ` · [map](https://www.google.com/maps/search/?api=1&query=${
+          encodeURIComponent(name)}&query_place_id=${p.place_id})`
       : "";
     const flag = p.geocode_status === "ambiguous" ? " ⚠️ *verify branch*"
       : p.geocode_status === "not_found" ? " ⚠️ *not geocoded*" : "";
