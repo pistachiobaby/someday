@@ -169,12 +169,15 @@ def thumbnail_frames(job: Path) -> list[Path]:
 
 
 def extract_frames(video: Path, frames_dir: Path) -> list[Path]:
+    # No check=True: ffmpeg 7 exits non-zero when a pass selects nothing
+    # (e.g. a static video has no scene changes); fall through to the fps
+    # pass, and degrade to zero frames rather than failing the video.
     frames_dir.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(video),
          "-vf", f"select='gt(scene,{FRAME_SCENE_THRESHOLD})',scale=-2:1080",
          "-vsync", "vfr", "-frames:v", str(MAX_FRAMES), str(frames_dir / "scene_%03d.jpg")],
-        check=True,
+        capture_output=True,
     )
     frames = sorted(frames_dir.glob("scene_*.jpg"))
     if len(frames) < MIN_FRAMES:
@@ -182,7 +185,7 @@ def extract_frames(video: Path, frames_dir: Path) -> list[Path]:
             ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(video),
              "-vf", "fps=1,scale=-2:1080", "-frames:v", str(MAX_FRAMES),
              str(frames_dir / "fps_%03d.jpg")],
-            check=True,
+            capture_output=True,
         )
         frames = sorted(frames_dir.glob("*.jpg"))
     return frames[:MAX_FRAMES]
