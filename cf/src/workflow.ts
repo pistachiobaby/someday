@@ -18,6 +18,10 @@ export type Place = {
   name_japanese: string | null;
   city: string | null;
   category: string;
+  // destination = visited/recommended; incidental = transit stops,
+  // navigation landmarks, passing mentions — kept for the doc, never pinned.
+  role: "destination" | "incidental";
+  is_chain: boolean;
   evidence: string;
   evidence_quote: string;
   confidence: "high" | "medium" | "low";
@@ -37,11 +41,13 @@ const PLACES_SCHEMA = {
           name_japanese: { type: "string" },
           city: { type: "string" },
           category: { type: "string" },
+          role: { type: "string", enum: ["destination", "incidental"] },
+          is_chain: { type: "boolean" },
           evidence: { type: "string" },
           evidence_quote: { type: "string" },
           confidence: { type: "string", enum: ["high", "medium", "low"] },
         },
-        required: ["name", "category", "evidence", "evidence_quote", "confidence"],
+        required: ["name", "category", "role", "is_chain", "evidence", "evidence_quote", "confidence"],
       },
     },
   },
@@ -119,7 +125,14 @@ export class VideoPipeline extends WorkflowEntrypoint<Env, Params> {
               "area mentioned as city (e.g. 'Nakano, Tokyo', not just 'Tokyo'). Spoken " +
               "shop names are often phonetically mangled by transcription: when a name " +
               "appears only in the transcript and no OCR/caption text corroborates it, " +
-              "set confidence to 'medium' at most. Ignore generic mentions (e.g. " +
+              "set confidence to 'medium' at most. Classify each place's role: " +
+              "'destination' when the video visits, reviews, or recommends it; " +
+              "'incidental' when it is only mentioned for transit or navigation " +
+              "(stations to ride through, 'turn at X', 'take the line from Y') or as " +
+              "a passing comparison — not somewhere the viewer is being told to go. " +
+              "Set is_chain=true for chains/franchises with many branches (konbini " +
+              "like Daily Yamazaki or 7-Eleven, chain restaurants, drugstores) where " +
+              "no single branch is meant. Ignore fully generic mentions (e.g. " +
               "'convenience stores', 'a ramen shop'). Return an empty list when there " +
               "is no specific place.",
           },
@@ -146,8 +159,10 @@ export class VideoPipeline extends WorkflowEntrypoint<Env, Params> {
                 role: "system",
                 content:
                   'Respond ONLY with a JSON object: {"places": [{"name", ' +
-                  '"name_japanese", "city", "category", "evidence", ' +
-                  '"evidence_quote", "confidence" ("high"|"medium"|"low")}]}',
+                  '"name_japanese", "city", "category", ' +
+                  '"role" ("destination"|"incidental"), "is_chain" (boolean), ' +
+                  '"evidence", "evidence_quote", ' +
+                  '"confidence" ("high"|"medium"|"low")}]}',
               },
             ],
           }) as string | { response?: unknown };
@@ -166,6 +181,8 @@ export class VideoPipeline extends WorkflowEntrypoint<Env, Params> {
           ...p,
           name_japanese: p.name_japanese || null,
           city: p.city || null,
+          role: p.role === "incidental" ? "incidental" as const : "destination" as const,
+          is_chain: p.is_chain === true,
         }));
       });
 
@@ -176,7 +193,9 @@ export class VideoPipeline extends WorkflowEntrypoint<Env, Params> {
         async () => {
           const out = [];
           for (const place of places) {
-            out.push({ place, geo: await geocodePlace(place, this.env.GOOGLE_MAPS_API_KEY) });
+            for (const geo of await geocodePlace(place, this.env.GOOGLE_MAPS_API_KEY)) {
+              out.push({ place, geo });
+            }
           }
           return out;
         },
@@ -197,11 +216,12 @@ export class VideoPipeline extends WorkflowEntrypoint<Env, Params> {
           this.env.DB.prepare("DELETE FROM places WHERE video_id=?").bind(videoId),
           ...geocoded.map(({ place, geo }) =>
             this.env.DB.prepare(
-              `INSERT INTO places (video_id, name, name_japanese, city, category, evidence,
-                 evidence_quote, confidence, place_id, resolved_name, address, lat, lng, geocode_status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              `INSERT INTO places (video_id, name, name_japanese, city, category, role, is_chain,
+                 evidence, evidence_quote, confidence, place_id, resolved_name, address, lat, lng, geocode_status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             ).bind(
               videoId, place.name, place.name_japanese, place.city, place.category,
+              place.role, place.is_chain ? 1 : 0,
               place.evidence, place.evidence_quote, place.confidence,
               geo.place_id, geo.resolved_name, geo.address, geo.lat, geo.lng, geo.status,
             ),

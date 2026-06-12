@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS places (
   evidence TEXT,
   evidence_quote TEXT,
   confidence TEXT,
+  role TEXT DEFAULT 'destination',  -- destination|incidental (transit/navigation mentions)
+  is_chain INTEGER DEFAULT 0,       -- chain/franchise: geocoded to nearby branches
   -- geocoding results
   place_id TEXT,
   resolved_name TEXT,

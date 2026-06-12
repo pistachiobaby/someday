@@ -1,6 +1,7 @@
 type PlaceRow = {
   name: string; name_japanese: string | null; city: string | null;
   category: string | null; evidence_quote: string | null; confidence: string | null;
+  role: string | null; is_chain: number | null;
   resolved_name: string | null; address: string | null;
   lat: number | null; lng: number | null; place_id: string | null;
   geocode_status: string | null; video_url: string; video_title: string | null;
@@ -56,6 +57,7 @@ export async function renderMapHtml(db: D1Database): Promise<string> {
     lat: p.lat, lng: p.lng,
     name: p.resolved_name ?? p.name,
     city: p.city, category: p.category, confidence: p.confidence,
+    chain: !!p.is_chain,
     quote: p.evidence_quote, address: p.address,
     gmaps: p.place_id
       ? "https://www.google.com/maps/search/?api=1&query=" +
@@ -98,6 +100,7 @@ export async function renderMapHtml(db: D1Database): Promise<string> {
   const group = L.featureGroup(places.map((p) => L.marker([p.lat, p.lng]).bindPopup(
     '<div class="popup"><h3>' + esc(p.name) + "</h3>" +
     (p.flagged ? '<div class="flag">⚠️ verify branch</div>' : "") +
+    (p.chain ? '<div class="flag">chain — nearby branch</div>' : "") +
     esc([p.category, p.city].filter(Boolean).join(" · ")) +
     (p.quote ? '<div class="quote">“' + esc(p.quote) + "”</div>" : "") +
     (p.address ? "<div>" + esc(p.address) + "</div>" : "") +
@@ -111,7 +114,9 @@ export async function renderMapHtml(db: D1Database): Promise<string> {
 }
 
 export async function renderTripDoc(db: D1Database): Promise<string> {
-  const places = await loadPlaces(db);
+  const all = await loadPlaces(db);
+  const places = all.filter((p) => p.role !== "incidental");
+  const incidental = all.filter((p) => p.role === "incidental");
   const lines = ["# Japan trip — places from TikTok bookmarks\n"];
   let city = "";
   for (const p of places) {
@@ -131,6 +136,12 @@ export async function renderTripDoc(db: D1Database): Promise<string> {
     lines.push(`- **${name}**${ja} — ${p.category} [${p.confidence}]${flag}`);
     if (p.evidence_quote) lines.push(`  - “${p.evidence_quote}”`);
     lines.push(`  - [source tiktok](${p.video_url})${maps}`);
+  }
+  if (incidental.length) {
+    lines.push("\n## Mentioned in passing (transit/navigation — not pinned)\n");
+    for (const p of incidental) {
+      lines.push(`- ${p.name}${p.city ? ` (${p.city})` : ""} — [source](${p.video_url})`);
+    }
   }
   return lines.join("\n");
 }
