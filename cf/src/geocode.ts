@@ -53,6 +53,12 @@ function toResult(p: any, status: GeocodeResult["status"]): GeocodeResult {
   };
 }
 
+// regionCode is only a bias — garbled names can match anywhere on earth.
+function inJapan(p: any): boolean {
+  const lat = p.location?.latitude, lng = p.location?.longitude;
+  return lat != null && lat >= 24 && lat <= 46 && lng >= 122 && lng <= 154;
+}
+
 // One Place can resolve to several rows: chains return up to
 // CHAIN_MAX_BRANCHES branches near the stated area instead of one
 // arbitrary nationwide hit.
@@ -73,17 +79,17 @@ export async function geocodePlace(
       });
       if (area[0]?.location) center = area[0].location;
     }
-    const branches = await searchText(apiKey, {
+    const branches = (await searchText(apiKey, {
       textQuery: `${place.name} ${place.city ?? ""}`.trim(),
       pageSize: CHAIN_MAX_BRANCHES,
       locationBias: { circle: { center, radius: CHAIN_RADIUS_M } },
-    });
+    })).filter(inJapan);
     if (branches.length === 0) return [EMPTY];
     return branches.map((b) => toResult(b, "ok"));
   }
 
   const query = [place.name, place.city ?? "", "Japan"].filter(Boolean).join(" ");
-  const places = await searchText(apiKey, { textQuery: query, pageSize: 3 });
+  const places = (await searchText(apiKey, { textQuery: query, pageSize: 3 })).filter(inJapan);
   if (places.length === 0) return [EMPTY];
   // >1 plausible result for a chain-like name → flag for human review
   const status = places.length > 1 && isChainLike(place.name) ? "ambiguous" : "ok";
