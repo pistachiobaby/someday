@@ -60,9 +60,11 @@ export class VideoPipeline extends WorkflowEntrypoint<Env, Params> {
     try {
       // 1. Download + frames + OCR inside the container. The container keeps
       //    the demuxed audio on its disk for step 2 (same shard → same instance).
+      //    Generous timeout: OCR takes minutes per video and the container
+      //    serializes it, so queued requests wait behind shard-mates.
       const processed = await step.do(
         "download+ocr",
-        { retries: { limit: 3, delay: "30 seconds", backoff: "exponential" }, timeout: "10 minutes" },
+        { retries: { limit: 3, delay: "30 seconds", backoff: "exponential" }, timeout: "30 minutes" },
         async (): Promise<ProcessResult> => {
           const res = await getContainer(this.env.PROCESSOR, shard).fetch(
             "http://container/process",
@@ -107,22 +109,43 @@ export class VideoPipeline extends WorkflowEntrypoint<Env, Params> {
           transcript,
           ocr_lines: processed.ocr_lines.map((l) => l.text),
         };
-        const out = await this.env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
-          messages: [
-            {
-              role: "system",
-              content:
-                "Extract every specific, visitable place in Japan referenced by signals " +
-                "from one TikTok travel video. OCR lines and transcripts are noisy — " +
-                "reconstruct garbled names when context allows, and record the city/area " +
-                "when stated. Ignore generic mentions (e.g. 'convenience stores', " +
-                "'a ramen shop'). Return an empty list when there is no specific place.",
-            },
-            { role: "user", content: JSON.stringify(signals) },
-          ],
-          response_format: { type: "json_schema", json_schema: PLACES_SCHEMA },
-        }) as string | { response?: unknown };
-        const raw = typeof out === "string" ? out : out.response;
+        const messages = [
+          {
+            role: "system",
+            content:
+              "Extract every specific, visitable place in Japan referenced by signals " +
+              "from one TikTok travel video. OCR lines and transcripts are noisy — " +
+              "reconstruct garbled names when context allows, and record the city/area " +
+              "when stated. Ignore generic mentions (e.g. 'convenience stores', " +
+              "'a ramen shop'). Return an empty list when there is no specific place.",
+          },
+          { role: "user", content: JSON.stringify(signals) },
+        ];
+        let raw: unknown;
+        try {
+          const out = await this.env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
+            messages,
+            response_format: { type: "json_schema", json_schema: PLACES_SCHEMA },
+          }) as string | { response?: unknown };
+          raw = typeof out === "string" ? out : out.response;
+        } catch {
+          // Strict JSON mode fails on some inputs (AiError 5024); fall back
+          // to a plain prompt and pull the JSON object out of the text.
+          const out = await this.env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
+            messages: [
+              ...messages,
+              {
+                role: "system",
+                content:
+                  'Respond ONLY with a JSON object: {"places": [{"name", ' +
+                  '"name_japanese", "city", "category", "evidence", ' +
+                  '"evidence_quote", "confidence" ("high"|"medium"|"low")}]}',
+              },
+            ],
+          }) as string | { response?: unknown };
+          const text = typeof out === "string" ? out : String(out.response ?? "");
+          raw = text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
+        }
         const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
         return (parsed as { places: Place[] }).places.map((p) => ({
           ...p,
