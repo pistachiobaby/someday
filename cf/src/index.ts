@@ -17,7 +17,7 @@ export interface Env {
   PROXY_URL?: string; // optional residential proxy for yt-dlp
 }
 
-const SHARDS = 3; // must match max_instances in wrangler.jsonc
+const SHARDS = 5; // must match max_instances in wrangler.jsonc
 
 export function shardFor(videoId: string): string {
   let h = 0;

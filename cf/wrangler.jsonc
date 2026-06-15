@@ -8,7 +8,7 @@
       "class_name": "Processor",
       "image": "./container/Dockerfile",
       "instance_type": "standard-2",
-      "max_instances": 3
+      "max_instances": 5
     }
   ],
   "durable_objects": {

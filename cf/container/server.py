@@ -25,7 +25,7 @@ WORK = Path("/work")
 WORK.mkdir(exist_ok=True)
 FRAME_SCENE_THRESHOLD = 0.3
 MIN_FRAMES = 4
-MAX_FRAMES = 16
+MAX_FRAMES = 12  # keep OCR well under the ~5-min fetch window
 OCR_MIN_CONFIDENCE = 0.65
 
 app = Flask(__name__)
@@ -41,8 +41,10 @@ def ocr_busy(_e):
 
 # One video's OCR at a time per instance (memory + CPU bound).
 _ocr_lock = threading.Lock()
-OCR_LOCK_WAIT = 600  # s a request waits for its OCR turn before 503ing
-OCR_BUDGET = 900  # s of OCR per video before we kill it and degrade
+# Fail fast: the workflow→container fetch dies at ~5 min, so a long lock-wait
+# guarantees a doomed fetch. 503 quickly instead and let the workflow back off.
+OCR_LOCK_WAIT = 45  # s a request waits for its OCR turn before 503ing
+OCR_BUDGET = 240  # s of OCR per video before we kill it and degrade
 
 
 def ytdlp(args, proxy=None):
