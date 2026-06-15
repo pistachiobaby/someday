@@ -69,6 +69,22 @@ curl -s $HOST/outputs/trip.md  -H "authorization: Bearer $TOKEN" -o trip.md
 Import `japan.kml` into [Google My Maps](https://mymaps.google.com) for
 planning and into **Organic Maps** on your phone for offline use in Japan.
 
+## Tests
+
+The map UI (`src/mapClient.ts`) is decoupled from D1: it reads its places from
+`window.__PLACES__` / `window.__BUCKETS__`, so the exact code the Worker ships
+also runs in a Vite harness against fixtures — no database or network.
+
+```bash
+cd cf
+npm install
+npx playwright install chromium   # first time only
+npm test                          # Vite serves test/harness.html, Playwright drives it
+```
+
+`test/map.spec.ts` covers pin rendering, category chips, search, and the
+home-location + radius filter (including localStorage persistence).
+
 ## Cost (one full run, ~130 videos)
 
 | Item | Cost |
