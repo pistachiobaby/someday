@@ -135,6 +135,20 @@ export async function renderMapHtml(db: D1Database): Promise<string> {
     border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
     border: 2px solid rgba(0,0,0,.35); box-sizing: border-box;
   }
+  #tools { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .tool {
+    border: 1px solid #ccc; background: #fff; border-radius: 7px;
+    padding: 5px 10px; font-size: 12px; cursor: pointer;
+  }
+  .tool.on { background: #2d6cdf; color: #fff; border-color: #2d6cdf; }
+  #radius-wrap { display: none; align-items: center; gap: 6px; flex: 1; min-width: 150px; }
+  #radius-wrap.show { display: flex; }
+  #radius { flex: 1; }
+  #radius-val { color: #333; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .home-pin {
+    width: 26px; height: 26px; font-size: 22px; line-height: 26px; text-align: center;
+    filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); cursor: grab;
+  }
 </style>
 </head>
 <body>
@@ -142,6 +156,14 @@ export async function renderMapHtml(db: D1Database): Promise<string> {
 <div id="panel">
   <input id="q" type="search" placeholder="Search places, categories, videos…">
   <div id="chips"></div>
+  <div id="tools">
+    <button id="set-home" class="tool">📍 Set home</button>
+    <button id="clear-home" class="tool" style="display:none">Clear</button>
+    <div id="radius-wrap">
+      <input id="radius" type="range" min="0.5" max="20" step="0.5" value="2">
+      <span id="radius-val">2.0 km</span>
+    </div>
+  </div>
 </div>
 <script>
   const BUCKETS = ${JSON.stringify(BUCKETS)};
@@ -155,6 +177,21 @@ export async function renderMapHtml(db: D1Database): Promise<string> {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
   }).addTo(map);
   const esc = (s) => (s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
+
+  // Great-circle distance in km.
+  function distKm(a, b, c, d) {
+    const R = 6371, r = Math.PI / 180;
+    const u = Math.sin((c - a) * r / 2) ** 2 +
+      Math.cos(a * r) * Math.cos(c * r) * Math.sin((d - b) * r / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(u));
+  }
+
+  // Home location + radius, persisted client-side (no backend).
+  let home = null, radiusKm = 2, homeMarker = null, homeCircle = null, placing = false;
+  try {
+    const saved = JSON.parse(localStorage.getItem("someday-home") || "null");
+    if (saved) { home = saved.home; radiusKm = saved.radiusKm || 2; }
+  } catch (e) {}
 
   const pinIcon = (color) => L.divIcon({
     className: "",
@@ -188,11 +225,17 @@ export async function renderMapHtml(db: D1Database): Promise<string> {
     for (const p of places) {
       if (!active.has(p.bucket)) continue;
       if (needle && !p.haystack.includes(needle)) continue;
+      if (home && distKm(home.lat, home.lng, p.lat, p.lng) > radiusKm) continue;
       layer.addLayer(p.marker);
       shown++;
     }
-    document.getElementById("count").textContent = shown + "/" + places.length;
-    if (fit && shown) map.fitBounds(layer.getBounds().pad(0.1));
+    const total = home ? "within " + radiusKm.toFixed(1) + " km" : places.length;
+    document.getElementById("count").textContent = shown + (home ? " " + total : "/" + total);
+    if (fit && shown) {
+      const b = layer.getBounds();
+      if (homeCircle) b.extend(homeCircle.getBounds());
+      map.fitBounds(b.pad(0.1));
+    }
   }
 
   const chips = document.getElementById("chips");
@@ -224,8 +267,72 @@ export async function renderMapHtml(db: D1Database): Promise<string> {
   count.id = "count";
   chips.appendChild(count);
 
+  // --- Home location + radius ---
+  const setHomeBtn = document.getElementById("set-home");
+  const clearHomeBtn = document.getElementById("clear-home");
+  const radiusWrap = document.getElementById("radius-wrap");
+  const radius = document.getElementById("radius");
+  const radiusVal = document.getElementById("radius-val");
+  const homeIcon = L.divIcon({
+    className: "", html: '<div class="home-pin">🏠</div>',
+    iconSize: [26, 26], iconAnchor: [13, 24],
+  });
+
+  function persist() {
+    localStorage.setItem("someday-home", JSON.stringify({ home, radiusKm }));
+  }
+
+  function drawHome(fit) {
+    if (homeMarker) homeMarker.remove();
+    if (homeCircle) homeCircle.remove();
+    radiusWrap.classList.toggle("show", !!home);
+    clearHomeBtn.style.display = home ? "" : "none";
+    setHomeBtn.textContent = home ? "📍 Move home" : "📍 Set home";
+    if (!home) { homeMarker = homeCircle = null; refresh(false); return; }
+    homeCircle = L.circle([home.lat, home.lng], {
+      radius: radiusKm * 1000, color: "#2d6cdf", weight: 1,
+      fillColor: "#2d6cdf", fillOpacity: 0.08,
+    }).addTo(map);
+    homeMarker = L.marker([home.lat, home.lng], { icon: homeIcon, draggable: true })
+      .addTo(map).bindPopup("Home — drag to move");
+    homeMarker.on("drag", (e) => {
+      const ll = e.target.getLatLng();
+      homeCircle.setLatLng(ll);
+    });
+    homeMarker.on("dragend", (e) => {
+      const ll = e.target.getLatLng();
+      home = { lat: ll.lat, lng: ll.lng };
+      persist(); refresh(false);
+    });
+    refresh(fit);
+  }
+
+  setHomeBtn.onclick = () => {
+    placing = !placing;
+    setHomeBtn.classList.toggle("on", placing);
+    map.getContainer().style.cursor = placing ? "crosshair" : "";
+  };
+  map.on("click", (e) => {
+    if (!placing) return;
+    home = { lat: e.latlng.lat, lng: e.latlng.lng };
+    placing = false;
+    setHomeBtn.classList.remove("on");
+    map.getContainer().style.cursor = "";
+    persist(); drawHome(false);
+  });
+  clearHomeBtn.onclick = () => { home = null; persist(); drawHome(false); };
+  radius.value = String(radiusKm);
+  radiusVal.textContent = radiusKm.toFixed(1) + " km";
+  radius.addEventListener("input", () => {
+    radiusKm = parseFloat(radius.value);
+    radiusVal.textContent = radiusKm.toFixed(1) + " km";
+    if (homeCircle) homeCircle.setRadius(radiusKm * 1000);
+    persist(); refresh(false);
+  });
+
   q.addEventListener("input", () => refresh(false));
   refresh(true);
+  if (home) drawHome(true);
 </script>
 </body>
 </html>`;
